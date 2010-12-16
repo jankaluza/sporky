@@ -7,6 +7,10 @@
 #define READ_COND  (G_IO_IN | G_IO_HUP | G_IO_ERR)
 #define WRITE_COND (G_IO_OUT | G_IO_HUP | G_IO_ERR | G_IO_NVAL)
 
+GMainLoop *loop;
+static jobject mainObj;
+static JNIEnv *mainEnv;
+
 typedef struct _PurpleIOClosure {
 	PurpleInputFunction function;
 	guint result;
@@ -192,9 +196,38 @@ static PurpleDebugUiOps debugUiOps =
 	NULL
 };
 
+static void buddyListNewNode(PurpleBlistNode *node) {
+	if (!PURPLE_BLIST_NODE_IS_BUDDY(node) || !mainEnv)
+		return;
+	PurpleBuddy *buddy = (PurpleBuddy *) node;
+	jclass cls = mainEnv->GetObjectClass(mainObj);
+	jmethodID mid = mainEnv->GetMethodID(cls, "onBuddyCreated", "(Ljava/lang/String;)V");
+	if (mid == 0)
+		return;
+	mainEnv->CallVoidMethod(mainObj, mid, mainEnv->NewStringUTF(purple_buddy_get_name(buddy)));
+}
+
+static PurpleBlistUiOps blistUiOps =
+{
+	NULL,
+	buddyListNewNode,
+	NULL,
+	NULL, // buddyListUpdate,
+	NULL, //NodeRemoved,
+	NULL,
+	NULL,
+	NULL, // buddyListAddBuddy,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL
+};
+
 static void transport_core_ui_init(void)
 {
-// 	purple_blist_set_ui_ops(&blistUiOps);
+	purple_blist_set_ui_ops(&blistUiOps);
 // 	purple_accounts_set_ui_ops(&accountUiOps);
 // 	purple_notify_set_ui_ops(&notifyUiOps);
 // 	purple_request_set_ui_ops(&requestUiOps);
@@ -218,7 +251,16 @@ static PurpleCoreUiOps coreUiOps =
 	NULL
 };
 
-int initPurple() {
+static void signed_on(PurpleConnection *gc,gpointer unused) {
+  jclass cls = mainEnv->GetObjectClass(mainObj);
+  jmethodID mid = mainEnv->GetMethodID(cls, "onConnected", "(Ljava/lang/String;)V");
+  if (mid == 0)
+    return;
+  mainEnv->CallVoidMethod(mainObj, mid, mainEnv->NewStringUTF(purple_account_get_username(purple_connection_get_account(gc))));
+}
+
+JNIEXPORT jint JNICALL Java_Sporky_init
+  (JNIEnv *, jobject, jstring) {
 	dlopen("libpurple.so",RTLD_NOW|RTLD_GLOBAL);
 
 	purple_util_set_user_dir("/tmp");
@@ -238,55 +280,68 @@ int initPurple() {
 		purple_blist_load();
 
 		purple_prefs_load();
+		purple_signal_connect(purple_connections_get_handle(), "signed-on", &conn_handle,PURPLE_CALLBACK(signed_on), NULL);
 	}
 	return ret;
 }
 
-static bool initialized;
-
-// JNIEXPORT void JNICALL 
-// Java_Callbacks_nativeMethod(JNIEnv *env, jobject obj, jint depth)
-// {
-//   jclass cls = (*env)->GetObjectClass(env, obj);
-//   jmethodID mid = (*env)->GetMethodID(env, cls, "callback", "(I)V");
-//   if (mid == 0)
-//     return;
-//   printf("In C, depth = %d, about to enter Java\n", depth);
-//   (*env)->CallVoidMethod(env, obj, mid, depth);
-//   printf("In C, depth = %d, back from Java\n", depth);
-// }
-
-JNIEXPORT jobjectArray JNICALL Java_Sporky_getContacts (JNIEnv *env, jclass, jstring _name, jobject, jstring _password) {
-	int i;
-
-	if (!initialized) {
-		initialized = initPurple();
-	}
-
-	if (!initialized) {
-		// TODO: exception
-	}
-
+JNIEXPORT void JNICALL Java_Sporky_connect (JNIEnv *env, jobject, jstring _name, jobject, jstring _password) {
 	const char *name = env->GetStringUTFChars(_name, 0);
 	const char *password = env->GetStringUTFChars(_password, 0);
 
-	PurpleAccount *account = purple_account_new(name, "prpl-msn");
+	PurpleAccount *account = purple_account_new(name, "prpl-jabber");
 	purple_account_set_password(account, password);
 	purple_account_set_enabled(account, "sporky", TRUE);
-	GMainLoop *loop = g_main_loop_new(NULL, FALSE);
-	g_main_loop_run(loop);
-
-	jobjectArray ret = (jobjectArray) env->NewObjectArray(5, env->FindClass("java/lang/String"), env->NewStringUTF(""));
-
-// 	for (i = 0; i < 5; i++) {
-// 		env->SetObjectArrayElement(ret, i, env->NewStringUTF(message[i]));
-// 	}
+	purple_accounts_add(account);
 
 	env->ReleaseStringUTFChars(_name, name);
 	env->ReleaseStringUTFChars(_password, password);
-	return ret;
-
 }
 
-JNIEXPORT void JNICALL Java_Sporky_deliveryChatMessage (JNIEnv *, jclass, jstring, jobject, jstring, jobjectArray) {
+JNIEXPORT jint JNICALL Java_Sporky_start (JNIEnv *env, jobject obj) {
+	mainObj = env->NewGlobalRef(obj);
+	mainEnv = env;
+	loop = g_main_loop_new(NULL, FALSE);
+	g_main_loop_run(loop);
+	
+	env->DeleteGlobalRef(mainObj);
+	return 0;
 }
+
+static gboolean stop_libpurple(void *data) {
+	purple_blist_uninit();
+	purple_core_quit();
+	
+	if (loop) {
+		g_main_loop_quit(loop);
+		g_main_loop_unref(loop);
+	}
+	return FALSE;
+}
+
+JNIEXPORT void JNICALL Java_Sporky_stop (JNIEnv *env, jobject) {
+	purple_timeout_add_seconds(0, &stop_libpurple, NULL);
+}
+
+JNIEXPORT void JNICALL Java_Sporky_sendMessage (JNIEnv *env, jobject, jstring _name, jstring _to, jstring _message) {
+	const char *name = env->GetStringUTFChars(_name, 0);
+	const char *to = env->GetStringUTFChars(_to, 0);
+	const char *message = env->GetStringUTFChars(_message, 0);
+	PurpleAccount *account = purple_accounts_find(name, "prpl-jabber");
+	
+	if (account) {
+		PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM,
+										to,
+										account);
+		if (!conv)
+			conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, account, to);
+
+		gchar *_markup = purple_markup_escape_text(message, -1);
+		purple_conv_im_send(PURPLE_CONV_IM(conv), _markup);
+	}
+	
+	env->ReleaseStringUTFChars(_name, name);
+	env->ReleaseStringUTFChars(_to, to);
+	env->ReleaseStringUTFChars(_message, message);
+}
+  
