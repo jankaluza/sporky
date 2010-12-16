@@ -244,17 +244,17 @@ int initPurple() {
 
 static bool initialized;
 
-JNIEXPORT void JNICALL 
-Java_Callbacks_nativeMethod(JNIEnv *env, jobject obj, jint depth)
-{
-  jclass cls = (*env)->GetObjectClass(env, obj);
-  jmethodID mid = (*env)->GetMethodID(env, cls, "callback", "(I)V");
-  if (mid == 0)
-    return;
-  printf("In C, depth = %d, about to enter Java\n", depth);
-  (*env)->CallVoidMethod(env, obj, mid, depth);
-  printf("In C, depth = %d, back from Java\n", depth);
-}
+// JNIEXPORT void JNICALL 
+// Java_Callbacks_nativeMethod(JNIEnv *env, jobject obj, jint depth)
+// {
+//   jclass cls = (*env)->GetObjectClass(env, obj);
+//   jmethodID mid = (*env)->GetMethodID(env, cls, "callback", "(I)V");
+//   if (mid == 0)
+//     return;
+//   printf("In C, depth = %d, about to enter Java\n", depth);
+//   (*env)->CallVoidMethod(env, obj, mid, depth);
+//   printf("In C, depth = %d, back from Java\n", depth);
+// }
 
 JNIEXPORT jobjectArray JNICALL Java_Sporky_getContacts (JNIEnv *env, jclass, jstring _name, jobject, jstring _password) {
 	int i;
@@ -273,12 +273,14 @@ JNIEXPORT jobjectArray JNICALL Java_Sporky_getContacts (JNIEnv *env, jclass, jst
 	PurpleAccount *account = purple_account_new(name, "prpl-msn");
 	purple_account_set_password(account, password);
 	purple_account_set_enabled(account, "sporky", TRUE);
+	GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+	g_main_loop_run(loop);
 
 	jobjectArray ret = (jobjectArray) env->NewObjectArray(5, env->FindClass("java/lang/String"), env->NewStringUTF(""));
 
-	for (i = 0; i < 5; i++) {
-		env->SetObjectArrayElement(ret, i, env->NewStringUTF(message[i]));
-	}
+// 	for (i = 0; i < 5; i++) {
+// 		env->SetObjectArrayElement(ret, i, env->NewStringUTF(message[i]));
+// 	}
 
 	env->ReleaseStringUTFChars(_name, name);
 	env->ReleaseStringUTFChars(_password, password);
