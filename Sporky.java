@@ -24,16 +24,17 @@ class Sporky {
 	protected void onConnected(Session ses) {
 		System.out.println("onConnected");
 		sendMessage(ses, "hanzz@njs.netlab.cz" ,"ahoj :) -- Sent by Sporky, don't answer here...");
-		stop();
-		
 	}
 
 	protected void onBuddyCreated(Session ses, Buddy buddy) {
 		System.out.println("onBuddyCreated");
+		System.out.println(buddy.alias);
+		System.out.println(buddy.name);
 	}
 
-	protected void onContactsReceived(String[] contacts) {
+	protected void onContactsReceived(Session ses, Buddy[] buddies) {
 		System.out.println("onContactsReceived");
+		System.out.println(buddies[0].name);
 		stop();
 	}
 

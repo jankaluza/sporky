@@ -3,6 +3,7 @@
 #include "glib.h"
 #include "purple.h"
 #include "dlfcn.h"
+#include "string.h"
 
 #define READ_COND  (G_IO_IN | G_IO_HUP | G_IO_ERR)
 #define WRITE_COND (G_IO_OUT | G_IO_HUP | G_IO_ERR | G_IO_NVAL)
@@ -10,6 +11,13 @@
 static GMainLoop *loop;
 static jobject mainObj;
 static JNIEnv *mainEnv;
+
+enum {
+	TYPE_JABBER,
+	TYPE_ICQ,
+	TYPE_MSN,
+	TYPE_AIM,
+};
 
 typedef struct _PurpleIOClosure {
 	PurpleInputFunction function;
@@ -211,16 +219,59 @@ static jobject buddy_new(PurpleBuddy *buddy) {
 	fid = mainEnv->GetFieldID(cls, "handle", "J");
 	mainEnv->SetLongField(object, fid, (jlong) buddy); 
 
-	buddy->node.ui_data = mainEnv->NewGlobalRef(object); // TODO: unref me!
+// 	buddy->node.ui_data = mainEnv->NewGlobalRef(object);
 
 	return object;
+}
+
+struct BuddiesCount {
+	PurpleAccount *account;
+	int last_count;
+};
+
+static gboolean check_buddies_count(void *data) {
+	BuddiesCount *count = (BuddiesCount *) data;
+	int current_count = purple_account_get_int(count->account, "buddies_count", 0);
+	std::cout << "CHECK BUDDIES COUNT " << current_count << " " << count->last_count << "\n";
+	if (current_count == count->last_count) {
+		GSList *buddies = purple_find_buddies(count->account, NULL);
+		jobjectArray array = (jobjectArray) mainEnv->NewObjectArray(g_slist_length(buddies), mainEnv->FindClass("Buddy"), 0);
+		int i = 0;
+		while(buddies) {
+			PurpleBuddy *b = (PurpleBuddy *) buddies->data;
+			jobject jBuddy = buddy_new(b);
+			mainEnv->SetObjectArrayElement(array, i++, jBuddy);
+			buddies = g_slist_delete_link(buddies, buddies);
+		}
+		callJavaMethod("onContactsReceived", "(LSession;[LBuddy;)V", count->account->ui_data, array);
+		return FALSE;
+	}
+	count->last_count = current_count;
+	return TRUE;
 }
 
 static void buddyListNewNode(PurpleBlistNode *node) {
 	if (!PURPLE_BLIST_NODE_IS_BUDDY(node) || !mainEnv)
 		return;
 	PurpleBuddy *buddy = (PurpleBuddy *) node;
-	callJavaMethod("onBuddyCreated", "(LSession;LBuddy;)V", purple_buddy_get_account(buddy)->ui_data, buddy_new(buddy));
+	PurpleAccount *account = purple_buddy_get_account(buddy);
+	callJavaMethod("onBuddyCreated", "(LSession;LBuddy;)V", account->ui_data, buddy_new(buddy));
+
+	int current_count = purple_account_get_int(account, "buddies_count", 0);
+	if (current_count == 0) {
+		BuddiesCount *count = new BuddiesCount;
+		count->account = account;
+		count->last_count = -1;
+		int t = purple_timeout_add_seconds(1, &check_buddies_count, count); // TODO: remove me on disconnect
+		purple_account_set_int(account, "buddies_timer", t);
+	}
+	purple_account_set_int(account, "buddies_count", current_count + 1);
+	
+}
+
+static void buddyRemoved(PurpleBuddy *buddy, gpointer null) {
+	if (buddy->node.ui_data)
+		mainEnv->DeleteGlobalRef((jobject) buddy->node.ui_data);
 }
 
 static void signed_on(PurpleConnection *gc,gpointer unused) {
@@ -323,6 +374,7 @@ JNIEXPORT jint JNICALL Java_Sporky_init(JNIEnv *env, jobject obj, jstring _dir) 
 
 		purple_prefs_load();
 		purple_signal_connect(purple_connections_get_handle(), "signed-on", &conn_handle,PURPLE_CALLBACK(signed_on), NULL);
+		purple_signal_connect(purple_blist_get_handle(), "buddy-removed", &blist_handle,PURPLE_CALLBACK(buddyRemoved), NULL);
 	}
 	mainObj = env->NewGlobalRef(obj);
 	mainEnv = env;
@@ -333,7 +385,27 @@ JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstr
 	const char *name = env->GetStringUTFChars(_name, 0);
 	const char *password = env->GetStringUTFChars(_password, 0);
 
-	PurpleAccount *account = purple_account_new(name, "prpl-jabber");
+	static char prpl[30];
+	switch(type) {
+		case TYPE_JABBER:
+			strcpy(prpl, "prpl-jabber");
+			break;
+		case TYPE_ICQ:
+			strcpy(prpl, "prpl-icq");
+			break;
+		case TYPE_MSN:
+			strcpy(prpl, "prpl-msn");
+			break;
+		case TYPE_AIM:
+			strcpy(prpl, "prpl-aim");
+			break;
+	}
+
+	PurpleAccount *account = purple_accounts_find(name, prpl);
+	if (account) {
+		purple_accounts_delete(account);
+	}
+	account = purple_account_new(name, prpl);
 	purple_account_set_password(account, password);
 	purple_account_set_enabled(account, "sporky", TRUE);
 	purple_accounts_add(account);
@@ -373,9 +445,7 @@ JNIEXPORT void JNICALL Java_Sporky_sendMessage (JNIEnv *env, jobject, jobject se
 	PurpleAccount *account = session_get_account(ses);
 	
 	if (account) {
-		PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM,
-										to,
-										account);
+		PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, to, account);
 		if (!conv)
 			conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, account, to);
 
