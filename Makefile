@@ -25,7 +25,7 @@ libsporky.so: Sporky.h Sporky.cpp
 	g++ $(CPPFLAGS) -o libsporky.so Sporky.cpp
 
 clean:
-	rm Sporky.h Sporky.class libsporky.so
+	rm Sporky.h Sporky.class Session.class libsporky.so
 
 test:
 	java -Djava.library.path=./ Sporky
