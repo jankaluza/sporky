@@ -21,11 +21,14 @@ Sporky.class: Sporky.java
 Sporky.h: Sporky.class
 	javah Sporky
 
-libsporky.so: Sporky.h Sporky.cpp
+Session.h: Sporky.class
+	javah Session
+
+libsporky.so: Sporky.h Session.h Sporky.cpp
 	g++ $(CPPFLAGS) -o libsporky.so Sporky.cpp
 
 clean:
-	rm Sporky.h Sporky.class Session.class libsporky.so
+	rm Sporky.h Sporky.class Session.class Buddy.class libsporky.so
 
 test:
 	java -Djava.library.path=./ Sporky

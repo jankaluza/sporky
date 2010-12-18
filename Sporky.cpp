@@ -1,4 +1,5 @@
 #include "Sporky.h"
+#include "Session.h"
 #include <iostream>
 #include "glib.h"
 #include "purple.h"
@@ -182,10 +183,10 @@ static PurpleDebugUiOps debugUiOps =
 	NULL
 };
 
-static int callJavaMethod(const char *method, const char *signature, ...) {
+static int callJavaMethod(jobject object, const char *method, const char *signature, ...) {
 	if (!mainEnv)
 		return -1;
-	jclass cls = mainEnv->GetObjectClass(mainObj);
+	jclass cls = mainEnv->GetObjectClass(object);
 	jmethodID mid = mainEnv->GetMethodID(cls, method, signature);
 	if (mid == 0)
 		return -1;
@@ -194,9 +195,9 @@ static int callJavaMethod(const char *method, const char *signature, ...) {
 	va_start(va, signature);
 	int ret = 1;
 	if (signature[strlen(signature) - 1] == 'V')
-		mainEnv->CallVoidMethodV(mainObj, mid, va);
+		mainEnv->CallVoidMethodV(object, mid, va);
 	else
-		ret = (int) mainEnv->CallIntMethodV(mainObj, mid, va);
+		ret = (int) mainEnv->CallIntMethodV(object, mid, va);
 	va_end(va);
 
 	return ret;
@@ -247,7 +248,7 @@ static gboolean check_buddies_count(void *data) {
 			mainEnv->SetObjectArrayElement(array, i++, jBuddy);
 			buddies = g_slist_delete_link(buddies, buddies);
 		}
-		callJavaMethod("onContactsReceived", "(LSession;[LBuddy;)V", count->account->ui_data, array);
+		callJavaMethod((jobject) count->account->ui_data, "onContactsReceived", "([LBuddy;)V", array);
 		delete count;
 		return FALSE;
 	}
@@ -260,7 +261,7 @@ static void buddyListNewNode(PurpleBlistNode *node) {
 		return;
 	PurpleBuddy *buddy = (PurpleBuddy *) node;
 	PurpleAccount *account = purple_buddy_get_account(buddy);
-	callJavaMethod("onBuddyCreated", "(LSession;LBuddy;)V", account->ui_data, buddy_new(buddy));
+	callJavaMethod((jobject) account->ui_data, "onBuddyCreated", "(LBuddy;)V", buddy_new(buddy));
 
 	int current_count = purple_account_get_int(account, "buddies_count", 0);
 	if (current_count == 0) {
@@ -281,7 +282,7 @@ static void buddyRemoved(PurpleBuddy *buddy, gpointer null) {
 
 static void signed_on(PurpleConnection *gc,gpointer unused) {
 	PurpleAccount *account = purple_connection_get_account(gc);
-	callJavaMethod("onConnected", "(LSession;)V", account->ui_data);
+	callJavaMethod((jobject) account->ui_data, "onConnected", "()V");
 	int current_count = purple_account_get_int(account, "buddies_count", 0);
 	if (current_count == 0) {
 		BuddiesCount *count = new BuddiesCount;
@@ -311,11 +312,11 @@ static PurpleBlistUiOps blistUiOps =
 };
 
 static void connection_report_disconnect(PurpleConnection *gc, PurpleConnectionError reason, const char *text) {
+	PurpleAccount *account = purple_connection_get_account(gc);
 	jstring error = mainEnv->NewStringUTF(text ? text : "");
-	callJavaMethod("onConnectionError", "(LSession;ILjava/lang/String;)V", 
-				purple_connection_get_account(gc)->ui_data,
-				(int) reason, error);
-	mainEnv->DeleteGlobalRef((jobject) purple_connection_get_account(gc)->ui_data);
+	callJavaMethod((jobject) account->ui_data, "onConnectionError", "(ILjava/lang/String;)V", (int) reason, error);
+	mainEnv->DeleteGlobalRef((jobject) account->ui_data);
+	purple_timeout_remove(purple_account_get_int(account, "buddies_timer", 0));
 }
 
 static PurpleConnectionUiOps conn_ui_ops =
@@ -375,6 +376,9 @@ static jobject session_new(PurpleAccount *account, int type) {
 	fid = mainEnv->GetFieldID(cls, "handle", "J");
 	mainEnv->SetLongField(object, fid, (jlong) account); 
 
+	fid = mainEnv->GetFieldID(cls, "sporky", "LSporky;");
+	mainEnv->SetObjectField(object, fid, (jobject) mainObj); 
+
 	account->ui_data = mainEnv->NewGlobalRef(object);
 
 	return object;
@@ -389,7 +393,7 @@ static PurpleAccount *session_get_account(jobject object) {
 
 
 JNIEXPORT jint JNICALL Java_Sporky_init(JNIEnv *env, jobject obj, jstring _dir) {
-	dlopen("libpurple.so",RTLD_NOW|RTLD_GLOBAL);
+	dlopen("libpurple.so", RTLD_NOW|RTLD_GLOBAL);
 
 	const char *dir = env->GetStringUTFChars(_dir, 0);
 	purple_util_set_user_dir(dir);
@@ -441,6 +445,13 @@ JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstr
 	PurpleAccount *account = purple_accounts_find(name, prpl);
 	if (account) {
 		purple_account_set_int(account, "buddies_count", 0);
+		GList *iter;
+		for (iter = purple_get_conversations(); iter; ) {
+			PurpleConversation *conv = (PurpleConversation*) iter->data;
+			iter = iter->next;
+			if (purple_conversation_get_account(conv) == account)
+				purple_conversation_destroy(conv);
+		}
 // 		purple_accounts_delete(account);
 	}
 	account = purple_account_new(name, prpl);
@@ -454,7 +465,7 @@ JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstr
 	return session_new(account, type);
 }
 
-JNIEXPORT void JNICALL Java_Sporky_disconnect (JNIEnv *env, jobject, jobject ses) {
+JNIEXPORT void JNICALL Java_Session_disconnect (JNIEnv *env, jobject ses) {
 	PurpleAccount *account = session_get_account(ses);
 	mainEnv->DeleteGlobalRef((jobject) account->ui_data);
 	purple_account_set_enabled(account, "sporky", FALSE);
@@ -483,7 +494,7 @@ JNIEXPORT void JNICALL Java_Sporky_stop (JNIEnv *env, jobject) {
 	purple_timeout_add_seconds(0, &stop_libpurple, NULL);
 }
 
-JNIEXPORT void JNICALL Java_Sporky_sendMessage (JNIEnv *env, jobject, jobject ses, jstring _to, jstring _message) {
+JNIEXPORT void JNICALL Java_Session_sendMessage (JNIEnv *env, jobject ses, jstring _to, jstring _message) {
 	const char *to = env->GetStringUTFChars(_to, 0);
 	const char *message = env->GetStringUTFChars(_message, 0);
 	PurpleAccount *account = session_get_account(ses);
@@ -501,20 +512,32 @@ JNIEXPORT void JNICALL Java_Sporky_sendMessage (JNIEnv *env, jobject, jobject se
 	env->ReleaseStringUTFChars(_message, message);
 }
 
+struct timerCallback {
+	jobject obj;
+	char *cb;
+};
+
 static gboolean _timer_callback(void *data) {
-	int ret = callJavaMethod((char *) data, "()I");
-	if (ret == 0)
-		g_free(data);
+	timerCallback *d  = (timerCallback *) data;
+	int ret = callJavaMethod(d->obj, d->cb, "()I");
+	if (ret == 0) {
+		mainEnv->DeleteGlobalRef(d->obj);
+		g_free(d->cb);
+		delete d;
+	}
 	return ret;
 }
 
-JNIEXPORT jint JNICALL Java_Sporky_addTimer (JNIEnv *env, jobject, jstring callback, jint ms) {
+JNIEXPORT jint JNICALL Java_Sporky_addTimer (JNIEnv *env, jobject, jobject obj, jstring callback, jint ms) {
 	int handle;
 	const char *cb = env->GetStringUTFChars(callback, 0);
+	timerCallback *d = new timerCallback;
+	d->obj = env->NewGlobalRef(obj);
+	d->cb = g_strdup(cb);
 	if (ms >= 1000)
-		handle = purple_timeout_add_seconds(ms / 1000, _timer_callback, g_strdup(cb));
+		handle = purple_timeout_add_seconds(ms / 1000, _timer_callback, d);
 	else
-		handle = purple_timeout_add(ms, _timer_callback, g_strdup(cb));
+		handle = purple_timeout_add(ms, _timer_callback, d);
 	env->ReleaseStringUTFChars(callback, cb);
 	return handle;
 }
