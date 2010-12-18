@@ -99,13 +99,13 @@ class Sporky {
 	// Adds new socket notifier.
 	// obj - object whichs function will be called when new data arrives on this socket
 	// callback - name of callback function
-	// source - file descriptor
+	// source - Socket/SocketImpl/FileDescriptor
 	// return value - handle which can be passed into removeSocketNotifier to stop socket notifier
 	// NOTE: Callback function has to be defined like:
 	// protected int NotifierCallbackTest(int source);
 	// If it returns 0, notifier will be automatically removed.
 	// If it returns 1, callback will be called again on new data.
-	protected native int addSocketNotifier(Object obj, String callback, int source);
+	protected native int addSocketNotifier(Object obj, String callback, Object source);
 
 	// Removes socket notifier.
 	// handle - handle from addSocketNotifier method.

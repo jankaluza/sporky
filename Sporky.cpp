@@ -42,6 +42,30 @@ static int callJavaMethod(jobject object, const char *method, const char *signat
 	return ret;
 }
 
+static int getFD(JNIEnv *env, jobject sock) {
+	jclass clazz;
+	jfieldID fid;
+	jobject impl;
+	jobject fdesc;
+	
+	/* get the SocketImpl from the Socket */
+	if (!(clazz = env->GetObjectClass(sock)) ||
+		!(fid = env->GetFieldID(clazz,"impl","Ljava/net/SocketImpl;")) ||
+		!(impl = env->GetObjectField(sock,fid))) return -1;
+		
+	/* get the FileDescriptor from the SocketImpl */
+	if (!(clazz = env->GetObjectClass(impl)) ||
+		!(fid = env->GetFieldID(clazz,"fd","Ljava/io/FileDescriptor;")) ||
+		!(fdesc = env->GetObjectField(impl,fid))) return -1;
+		
+	/* get the fd from the FileDescriptor */
+	if (!(clazz = env->GetObjectClass(fdesc)) ||
+		!(fid = env->GetFieldID(clazz,"fd","I"))) return -1;
+	
+	/* return the descriptor */
+	return env->GetIntField(fdesc,fid);
+}
+
 static jobject buddy_new(PurpleBuddy *buddy) {
 	jfieldID fid;
 	jclass cls = mainEnv->FindClass("Buddy");
@@ -437,8 +461,11 @@ static void _input_callback(gpointer data, gint source, PurpleInputCondition con
 	}
 }
 
-JNIEXPORT jint JNICALL Java_Sporky_addSocketNotifier (JNIEnv *env, jobject, jobject obj, jstring callback, jint source) {
+JNIEXPORT jint JNICALL Java_Sporky_addSocketNotifier (JNIEnv *env, jobject, jobject obj, jstring callback, jobject s_obj) {
 	int handle;
+	int source = getFD(env, s_obj);
+	if (source == -1)
+		return source;
 	const char *cb = env->GetStringUTFChars(callback, 0);
 	timerCallback *d = new timerCallback;
 	d->obj = env->NewGlobalRef(obj);
