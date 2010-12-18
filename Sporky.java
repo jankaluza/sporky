@@ -46,10 +46,14 @@ class Session {
 		sporky.addTimer(this, "TimeoutCallbackTest", 10000);
 	}
 
+	// Called when new message is received.
+	// from - username of sender
+	// message - message
+	// flags - mainly future use - http://developer.pidgin.im/doxygen/dev/html/conversation_8h.html#66e44dfdc0de2953d73f03fb806bf6f5
+	// timestamp - time_t - for delayed message it's time when the message has been sent
 	protected void onMessageReceived(String from, String message, int flags, long timestamp) {
 		System.out.println("onMessageReceived");
 		System.out.println(message);
-		sporky.stop();
 	}
 
 	protected int TimeoutCallbackTest() {
