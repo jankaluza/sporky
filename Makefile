@@ -24,8 +24,8 @@ Sporky.h: Sporky.class
 Session.h: Sporky.class
 	javah Session
 
-libsporky.so: Sporky.h Session.h Sporky.cpp
-	g++ $(CPPFLAGS) -o libsporky.so Sporky.cpp
+libsporky.so: Sporky.h Session.h Sporky.cpp geventloop.h debugstuff.h
+	g++ $(CPPFLAGS) -o libsporky.so Sporky.cpp geventloop.c debugstuff.c
 
 clean:
 	rm Sporky.h Sporky.class Session.class Buddy.class libsporky.so

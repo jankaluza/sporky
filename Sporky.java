@@ -5,36 +5,57 @@ class Buddy {
 }
 
 class Session {
+	// Disconnects this session from legacy network.
 	protected native void disconnect();
+
+	// Sends message to buddy in legacy network
+	// to - username of recipient
+	// message - message
 	protected native void sendMessage(String to, String message);
 
-	protected int TimeoutCallbackTest() {
-		disconnect();
-		sporky.stop();
-		return 0;
-	}
-
+	// Called when this session connects the legacy network
 	protected void onConnected() {
 		System.out.println("onConnected");
 		sendMessage("hanzz@njs.netlab.cz" ,"ahoj :) -- Sent by Sporky, don't answer here...");
 	}
 
+	// Called when this session coulnd't connect legacy network.
+	// Session is disconnected after this signal.
+	// error - http://developer.pidgin.im/doxygen/dev/html/connection_8h.html#d073b7b1d65488a3b3e39fc382324c4d
+	// message - error message
 	protected void onConnectionError(int error, String message) {
 		System.out.println("onConnectionError");
 		System.out.println(message);
 		sporky.stop();
 	}
 
+	// Called when there's new buddy created and pushed into buddy list.
+	// NOTE: This is called for each buddy just once, so if you reconnect the session,
+	// it won't be called again.
 	protected void onBuddyCreated(Buddy buddy) {
 		System.out.println("onBuddyCreated");
 		System.out.println(buddy.alias);
 		System.out.println(buddy.name);
 	}
 
+	// Called when all contacts are received from legacy network. This is called
+	// on every login.
 	protected void onContactsReceived(Buddy[] buddies) {
 		System.out.println("onContactsReceived");
 		System.out.println(buddies[0].name);
-		sporky.addTimer(this, "TimeoutCallbackTest", 4000);
+		sporky.addTimer(this, "TimeoutCallbackTest", 10000);
+	}
+
+	protected void onMessageReceived(String from, String message, int flags, long timestamp) {
+		System.out.println("onMessageReceived");
+		System.out.println(message);
+		sporky.stop();
+	}
+
+	protected int TimeoutCallbackTest() {
+		disconnect();
+		sporky.stop();
+		return 0;
 	}
 
 	protected int type;
@@ -44,11 +65,58 @@ class Session {
 }
 
 class Sporky {
+	// Initializes Sporky.
+	// purpleDir - directory where libpurple stored cached avatars/buddies/certificates
+	// return value - 1 if initialization was successfull, otherwise 0
 	protected native int init(String purpleDir);
-	protected native int start();
+
+	// Starts main event loop. This call blocks. You have to stop Sporky in some callback
+	// using stop(); method.
+	protected native void start();
+
+	// Stops main event loop.
 	protected native void stop();
+
+	// Adds new timer.
+	// obj - object whichs function will be called as timeout callback
+	// callback - name of callback function
+	// ms - timeout in miliseconds.
+	// return value - handle which can be passed into removeTimer to stop timer
+	// NOTE: Callback function has to be defined like:
+	// protected int TimeoutCallbackTest();
+	// If it returns 0, timer will be automatically removed.
+	// If it returns 1, callback will be called again after timeout.
 	protected native int addTimer(Object obj, String callback, int ms);
+
+	// Removes timer.
+	// handle - handle from addTimer method.
 	protected native void removeTimer(int handle);
+
+	// Adds new socket notifier.
+	// obj - object whichs function will be called when new data arrives on this socket
+	// callback - name of callback function
+	// source - file descriptor
+	// return value - handle which can be passed into removeSocketNotifier to stop socket notifier
+	// NOTE: Callback function has to be defined like:
+	// protected int NotifierCallbackTest(int source);
+	// If it returns 0, notifier will be automatically removed.
+	// If it returns 1, callback will be called again on new data.
+	protected native int addSocketNotifier(Object obj, String callback, int source);
+
+	// Removes socket notifier.
+	// handle - handle from addSocketNotifier method.
+	protected native void removeSocketNotifier(int handle);
+
+	// Connects to legacy network and creates Session.
+	// accountName - username used for login
+	// transport - enum {
+	// 	TYPE_JABBER = 0,
+	// 	TYPE_ICQ,
+	// 	TYPE_MSN,
+	// 	TYPE_AIM,
+	// };
+	// password - password
+	// return value - Session associated with this account
 	protected native Session connect(String accountName, int transport, String password);
 
 	public static void main(String[] args) {

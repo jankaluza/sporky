@@ -1,5 +1,7 @@
 #include "Sporky.h"
 #include "Session.h"
+#include "geventloop.h"
+#include "debugstuff.h"
 #include <iostream>
 #include "glib.h"
 #include "purple.h"
@@ -20,176 +22,13 @@ enum {
 	TYPE_AIM,
 };
 
-typedef struct _PurpleIOClosure {
-	PurpleInputFunction function;
-	guint result;
-	gpointer data;
-} PurpleIOClosure;
-
-static gboolean io_invoke(GIOChannel *source, GIOCondition condition, gpointer data) {
-	PurpleIOClosure *closure = (PurpleIOClosure* )data;
-	PurpleInputCondition purple_cond = (PurpleInputCondition)0;
-
-	int tmp = 0;
-	if (condition & READ_COND) {
-		tmp |= PURPLE_INPUT_READ;
-		purple_cond = (PurpleInputCondition)tmp;
-	}
-
-	if (condition & WRITE_COND) {
-		tmp |= PURPLE_INPUT_WRITE;
-		purple_cond = (PurpleInputCondition)tmp;
-	}
-
-	closure->function(closure->data, g_io_channel_unix_get_fd(source), purple_cond);
-
-	return TRUE;
-}
-
-static void io_destroy(gpointer data) {
-	g_free(data);
-}
-
-static guint input_add(gint fd, PurpleInputCondition condition, PurpleInputFunction function, gpointer data) {
-	PurpleIOClosure *closure = g_new0(PurpleIOClosure, 1);
-	GIOChannel *channel;
-	GIOCondition cond = (GIOCondition)0;
-	closure->function = function;
-	closure->data = data;
-
-	int tmp = 0;
-	if (condition & PURPLE_INPUT_READ) {
-		tmp |= READ_COND;
-		cond = (GIOCondition)tmp;
-	}
-	if (condition & PURPLE_INPUT_WRITE) {
-		tmp |= WRITE_COND;
-		cond = (GIOCondition)tmp;
-	}
-
-	channel = g_io_channel_unix_new(fd);
-	closure->result = g_io_add_watch_full(channel, G_PRIORITY_DEFAULT, cond, io_invoke, closure, io_destroy);
-	g_io_channel_unref(channel);
-
-	return closure->result;
-}
-
-static PurpleEventLoopUiOps eventLoopOps =
-{
-	g_timeout_add,
-	g_source_remove,
-	input_add,
-	g_source_remove,
-	NULL,
-#if GLIB_CHECK_VERSION(2,14,0)
-	g_timeout_add_seconds,
-#else
-	NULL,
-#endif
-	NULL,
-	NULL,
-	NULL
-};
-
-static PurpleEventLoopUiOps * getEventLoopUiOps() {
-	return &eventLoopOps;
-}
-
-
-static void
-spectrum_glib_log_handler(const gchar *domain, GLogLevelFlags flags, const gchar *message, gpointer user_data) {
-	const char *level;
-	char *new_msg = NULL;
-	char *new_domain = NULL;
-
-	if ((flags & G_LOG_LEVEL_ERROR) == G_LOG_LEVEL_ERROR)
-		level = "ERROR";
-	else if ((flags & G_LOG_LEVEL_CRITICAL) == G_LOG_LEVEL_CRITICAL)
-		level = "CRITICAL";
-	else if ((flags & G_LOG_LEVEL_WARNING) == G_LOG_LEVEL_WARNING)
-		level = "WARNING";
-	else if ((flags & G_LOG_LEVEL_MESSAGE) == G_LOG_LEVEL_MESSAGE)
-		level = "MESSAGE";
-	else if ((flags & G_LOG_LEVEL_INFO) == G_LOG_LEVEL_INFO)
-		level = "INFO";
-	else if ((flags & G_LOG_LEVEL_DEBUG) == G_LOG_LEVEL_DEBUG)
-		level = "DEBUG";
-	else {
-		std::cout << "glib" << "Unknown glib logging level in " << (guint)flags;
-		level = "UNKNOWN"; /* This will never happen. */
-	}
-
-	if (message != NULL)
-		new_msg = purple_utf8_try_convert(message);
-
-	if (domain != NULL)
-		new_domain = purple_utf8_try_convert(domain);
-
-	if (new_msg != NULL) {
-		std::string area("glib");
-		area.push_back('/');
-		area.append(level);
-
-		std::string message(new_domain ? new_domain : "g_log");
-		message.push_back(' ');
-		message.append(new_msg);
-
-		std::cout << area << " | " << message;
-		g_free(new_msg);
-	}
-
-	g_free(new_domain);
-}
-
-static void
-debug_init(void)
-{
-#define REGISTER_G_LOG_HANDLER(name) \
-	g_log_set_handler((name), \
-		(GLogLevelFlags)(G_LOG_LEVEL_MASK | G_LOG_FLAG_FATAL \
-		                                  | G_LOG_FLAG_RECURSION), \
-	                  spectrum_glib_log_handler, NULL)
-
-	REGISTER_G_LOG_HANDLER(NULL);
-	REGISTER_G_LOG_HANDLER("GLib");
-	REGISTER_G_LOG_HANDLER("GModule");
-	REGISTER_G_LOG_HANDLER("GLib-GObject");
-	REGISTER_G_LOG_HANDLER("GThread");
-
-#undef REGISTER_G_LOD_HANDLER
-}
-
-static void printDebug(PurpleDebugLevel level, const char *category, const char *arg_s) {
-	std::string c("libpurple");
-
-	if (category) {
-		c.push_back('/');
-		c.append(category);
-	}
-
-	std::cout << c << " | " << arg_s;
-}
-
-/*
- * Ops....
- */
-static PurpleDebugUiOps debugUiOps =
-{
-	printDebug,
-	NULL,
-	NULL,
-	NULL,
-	NULL,
-	NULL
-};
-
 static int callJavaMethod(jobject object, const char *method, const char *signature, ...) {
 	if (!mainEnv)
-		return -1;
+		return 0;
 	jclass cls = mainEnv->GetObjectClass(object);
 	jmethodID mid = mainEnv->GetMethodID(cls, method, signature);
 	if (mid == 0)
-		return -1;
+		return 0;
 
 	va_list va;
 	va_start(va, signature);
@@ -334,6 +173,45 @@ static PurpleConnectionUiOps conn_ui_ops =
 	NULL
 };
 
+static void conv_write_im(PurpleConversation *conv, const char *who, const char *message, PurpleMessageFlags flags, time_t mtime) {
+	if (who == NULL)
+		return;
+
+	// Don't forwards our own messages.
+	if (flags & PURPLE_MESSAGE_SEND || flags & PURPLE_MESSAGE_SYSTEM)
+		return;
+
+	PurpleAccount *account = purple_conversation_get_account(conv);
+	callJavaMethod((jobject) account->ui_data, "onMessageReceived", "(Ljava/lang/String;Ljava/lang/String;IJ)V",
+					mainEnv->NewStringUTF(who),
+					mainEnv->NewStringUTF(message),
+					(int) flags,
+					(jlong) mtime);
+}
+
+static PurpleConversationUiOps conversation_ui_ops =
+{
+	NULL,//pidgin_conv_new,
+	NULL,
+	NULL,                              /* write_chat           */
+	conv_write_im,             /* write_im             */
+	NULL,           /* write_conv           */
+	NULL,       /* chat_add_users       */
+	NULL,     /* chat_rename_user     */
+	NULL,    /* chat_remove_users    */
+	NULL,//pidgin_conv_chat_update_user,     /* chat_update_user     */
+	NULL,//pidgin_conv_present_conversation, /* present              */
+	NULL,//pidgin_conv_has_focus,            /* has_focus            */
+	NULL,//pidgin_conv_custom_smiley_add,    /* custom_smiley_add    */
+	NULL,//pidgin_conv_custom_smiley_write,  /* custom_smiley_write  */
+	NULL,//pidgin_conv_custom_smiley_close,  /* custom_smiley_close  */
+	NULL,//pidgin_conv_send_confirm,         /* send_confirm         */
+	NULL,
+	NULL,
+	NULL,
+	NULL
+};
+
 static void transport_core_ui_init(void)
 {
 	purple_blist_set_ui_ops(&blistUiOps);
@@ -342,7 +220,7 @@ static void transport_core_ui_init(void)
 // 	purple_request_set_ui_ops(&requestUiOps);
 // 	purple_xfers_set_ui_ops(getXferUiOps());
 	purple_connections_set_ui_ops(&conn_ui_ops);
-// 	purple_conversations_set_ui_ops(&conversation_ui_ops);
+	purple_conversations_set_ui_ops(&conversation_ui_ops);
 // #ifndef WIN32
 // 	purple_dnsquery_set_ui_ops(getDNSUiOps());
 // #endif
@@ -399,7 +277,7 @@ JNIEXPORT jint JNICALL Java_Sporky_init(JNIEnv *env, jobject obj, jstring _dir) 
 	purple_util_set_user_dir(dir);
 	env->ReleaseStringUTFChars(_dir, dir);
 
-	purple_debug_set_ui_ops(&debugUiOps);
+	purple_debug_set_ui_ops(getDebugUiOps());
 
 	purple_core_set_ui_ops(&coreUiOps);
 	purple_eventloop_set_ui_ops(getEventLoopUiOps());
@@ -471,12 +349,11 @@ JNIEXPORT void JNICALL Java_Session_disconnect (JNIEnv *env, jobject ses) {
 	purple_account_set_enabled(account, "sporky", FALSE);
 }
 
-JNIEXPORT jint JNICALL Java_Sporky_start (JNIEnv *env, jobject obj) {
+JNIEXPORT void JNICALL Java_Sporky_start (JNIEnv *env, jobject obj) {
 	loop = g_main_loop_new(NULL, FALSE);
 	g_main_loop_run(loop);
 	
 	env->DeleteGlobalRef(mainObj);
-	return 0;
 }
 
 static gboolean stop_libpurple(void *data) {
@@ -515,6 +392,7 @@ JNIEXPORT void JNICALL Java_Session_sendMessage (JNIEnv *env, jobject ses, jstri
 struct timerCallback {
 	jobject obj;
 	char *cb;
+	int handle;
 };
 
 static gboolean _timer_callback(void *data) {
@@ -543,6 +421,36 @@ JNIEXPORT jint JNICALL Java_Sporky_addTimer (JNIEnv *env, jobject, jobject obj, 
 }
 
 JNIEXPORT void JNICALL Java_Sporky_removeTimer (JNIEnv *, jobject, jint handle) {
+	// TODO: remove timerCallback somehow otherwise it will leaks on both java and C++ side
+	// but it's still better than potential crash.
 	purple_timeout_remove(handle);
 }
-  
+
+static void _input_callback(gpointer data, gint source, PurpleInputCondition cond) {
+	timerCallback *d  = (timerCallback *) data;
+	int ret = callJavaMethod(d->obj, d->cb, "(I)I");
+	if (ret == 0) {
+		mainEnv->DeleteGlobalRef(d->obj);
+		g_free(d->cb);
+		purple_input_remove(d->handle);
+		delete d;
+	}
+}
+
+JNIEXPORT jint JNICALL Java_Sporky_addSocketNotifier (JNIEnv *env, jobject, jobject obj, jstring callback, jint source) {
+	int handle;
+	const char *cb = env->GetStringUTFChars(callback, 0);
+	timerCallback *d = new timerCallback;
+	d->obj = env->NewGlobalRef(obj);
+	d->cb = g_strdup(cb);
+	handle = purple_input_add(source, PURPLE_INPUT_READ, _input_callback, d);
+	d->handle = handle;
+	env->ReleaseStringUTFChars(callback, cb);
+	return handle;
+}
+
+JNIEXPORT void JNICALL Java_Sporky_removeSocketNotifier (JNIEnv *, jobject, jint handle) {
+	// TODO: remove timerCallback somehow otherwise it will leaks on both java and C++ side
+	// but it's still better than potential crash.
+	purple_input_remove(handle);
+}
