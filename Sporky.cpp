@@ -22,6 +22,36 @@ enum {
 	TYPE_AIM,
 };
 
+static const char *connectionErrors[] = {
+	"CONNECTION_ERROR_NETWORK_ERROR",
+	"CONNECTION_ERROR_INVALID_USERNAME",
+	"CONNECTION_ERROR_AUTHENTICATION_FAILED",
+	"CONNECTION_ERROR_AUTHENTICATION_IMPOSSIBLE",
+	"CONNECTION_ERROR_NO_SSL_SUPPORT",
+	"CONNECTION_ERROR_ENCRYPTION_ERROR",
+	"CONNECTION_ERROR_NAME_IN_USE",
+	"CONNECTION_ERROR_INVALID_SETTINGS",
+	"CONNECTION_ERROR_CERT_NOT_PROVIDED",
+	"CONNECTION_ERROR_CERT_UNTRUSTED",
+	"CONNECTION_ERROR_CERT_EXPIRED",
+	"CONNECTION_ERROR_CERT_NOT_ACTIVATED",
+	"CONNECTION_ERROR_CERT_HOSTNAME_MISMATCH",
+	"CONNECTION_ERROR_CERT_FINGERPRINT_MISMATCH",
+	"CONNECTION_ERROR_CERT_SELF_SIGNED",
+	"CONNECTION_ERROR_CERT_OTHER_ERROR",
+	"CONNECTION_ERROR_OTHER_ERROR"
+};
+
+static const char *statusTypes[] = {
+	"UNSET",
+	"OFFLINE",
+	"AVAILABLE",
+	"UNAVAILABLE",
+	"INVISIBLE",
+	"AWAY",
+	"EXTENDED_AWAY"
+};
+
 static int callJavaMethod(jobject object, const char *method, const char *signature, ...) {
 	if (!mainEnv)
 		return 0;
@@ -40,6 +70,11 @@ static int callJavaMethod(jobject object, const char *method, const char *signat
 	va_end(va);
 
 	return ret;
+}
+static int enumToInt(jobject object) {
+	jclass cls = mainEnv->GetObjectClass(object);
+	jmethodID mid = mainEnv->GetMethodID(cls, "ordinal", "()I");
+	return (int) mainEnv->CallIntMethod(object, mid);
 }
 
 static int getFD(JNIEnv *env, jobject sock) {
@@ -66,6 +101,47 @@ static int getFD(JNIEnv *env, jobject sock) {
 	return env->GetIntField(fdesc,fid);
 }
 
+static jobject enum_new(const char *name, const char *value, int i) {
+	jclass cls = mainEnv->FindClass(name);
+	jmethodID mid = mainEnv->GetMethodID (cls, "<init>", "(Ljava/lang/String;I)V");
+	jobject object = mainEnv->NewObject(cls, mid, mainEnv->NewStringUTF(value), i);
+	return object;
+}
+
+static jobject buddy_new(PurpleBuddy *);
+
+static void buddy_update_status(PurpleBuddy *b) {
+	if (b->node.ui_data == NULL)
+		buddy_new(b);
+	jobject jBuddy = (jobject) b->node.ui_data;
+	jclass cls = mainEnv->GetObjectClass(jBuddy);
+
+	PurplePresence *pres = purple_buddy_get_presence(b);
+	if (pres == NULL)
+		return;
+	PurpleStatus *stat = purple_presence_get_active_status(pres);
+	if (stat == NULL)
+		return;
+	int status = purple_status_type_get_primitive(purple_status_get_type(stat));
+	const char *message = purple_status_get_attr_string(stat, "message");
+
+	jstring msg;
+	if (message != NULL) {
+		char *stripped = purple_markup_strip_html(message);
+		msg = mainEnv->NewStringUTF(stripped);
+		g_free(stripped);
+	}
+	else
+		msg = mainEnv->NewStringUTF("");
+
+	jfieldID fid;
+	fid = mainEnv->GetFieldID(cls, "statusMessage", "Ljava/lang/String;");
+	mainEnv->SetObjectField(jBuddy, fid, msg);
+
+	fid = mainEnv->GetFieldID(cls, "status", "LStatusType;");
+	mainEnv->SetObjectField(jBuddy, fid, enum_new("StatusType", statusTypes[status], status));
+}
+
 static jobject buddy_new(PurpleBuddy *buddy) {
 	jfieldID fid;
 	jclass cls = mainEnv->FindClass("Buddy");
@@ -87,7 +163,9 @@ static jobject buddy_new(PurpleBuddy *buddy) {
 	fid = mainEnv->GetFieldID(cls, "handle", "J");
 	mainEnv->SetLongField(object, fid, (jlong) buddy); 
 
-// 	buddy->node.ui_data = mainEnv->NewGlobalRef(object);
+	buddy->node.ui_data = mainEnv->NewGlobalRef(object);
+
+	buddy_update_status(buddy);
 
 	return object;
 }
@@ -107,7 +185,10 @@ static gboolean check_buddies_count(void *data) {
 		int i = 0;
 		while(buddies) {
 			PurpleBuddy *b = (PurpleBuddy *) buddies->data;
-			jobject jBuddy = buddy_new(b);
+			if (b->node.ui_data == NULL)
+				buddy_new(b);
+			buddy_update_status(b);
+			jobject jBuddy = (jobject) b->node.ui_data;
 			mainEnv->SetObjectArrayElement(array, i++, jBuddy);
 			buddies = g_slist_delete_link(buddies, buddies);
 		}
@@ -141,6 +222,24 @@ static void buddyListNewNode(PurpleBlistNode *node) {
 static void buddyRemoved(PurpleBuddy *buddy, gpointer null) {
 	if (buddy->node.ui_data)
 		mainEnv->DeleteGlobalRef((jobject) buddy->node.ui_data);
+}
+
+static void buddyStatusChanged(PurpleBuddy *buddy, PurpleStatus *status, PurpleStatus *old_status) {
+	buddy_update_status(buddy);
+	PurpleAccount *account = purple_buddy_get_account(buddy);
+	callJavaMethod((jobject) account->ui_data, "onBuddyStatusChanged", "(LBuddy;)V", (jobject) buddy->node.ui_data);
+}
+
+static void buddySignedOn(PurpleBuddy *buddy) {
+	buddy_update_status(buddy);
+	PurpleAccount *account = purple_buddy_get_account(buddy);
+	callJavaMethod((jobject) account->ui_data, "onBuddySignedOn", "(LBuddy;)V", (jobject) buddy->node.ui_data);
+}
+
+static void buddySignedOff(PurpleBuddy *buddy) {
+	buddy_update_status(buddy);
+	PurpleAccount *account = purple_buddy_get_account(buddy);
+	callJavaMethod((jobject) account->ui_data, "onBuddySignedOff", "(LBuddy;)V", (jobject) buddy->node.ui_data);
 }
 
 static void signed_on(PurpleConnection *gc,gpointer unused) {
@@ -177,7 +276,8 @@ static PurpleBlistUiOps blistUiOps =
 static void connection_report_disconnect(PurpleConnection *gc, PurpleConnectionError reason, const char *text) {
 	PurpleAccount *account = purple_connection_get_account(gc);
 	jstring error = mainEnv->NewStringUTF(text ? text : "");
-	callJavaMethod((jobject) account->ui_data, "onConnectionError", "(ILjava/lang/String;)V", (int) reason, error);
+	callJavaMethod((jobject) account->ui_data, "onConnectionError", "(LConnectionErrorType;Ljava/lang/String;)V",
+				   enum_new("ConnectionErrorType", connectionErrors[reason], reason), error);
 	mainEnv->DeleteGlobalRef((jobject) account->ui_data);
 	purple_timeout_remove(purple_account_get_int(account, "buddies_timer", 0));
 }
@@ -318,15 +418,19 @@ JNIEXPORT jint JNICALL Java_Sporky_init(JNIEnv *env, jobject obj, jstring _dir) 
 		purple_prefs_load();
 		purple_signal_connect(purple_connections_get_handle(), "signed-on", &conn_handle,PURPLE_CALLBACK(signed_on), NULL);
 		purple_signal_connect(purple_blist_get_handle(), "buddy-removed", &blist_handle,PURPLE_CALLBACK(buddyRemoved), NULL);
+		purple_signal_connect(purple_blist_get_handle(), "buddy-signed-on", &blist_handle,PURPLE_CALLBACK(buddySignedOn), NULL);
+		purple_signal_connect(purple_blist_get_handle(), "buddy-signed-off", &blist_handle,PURPLE_CALLBACK(buddySignedOff), NULL);
+		purple_signal_connect(purple_blist_get_handle(), "buddy-status-changed", &blist_handle,PURPLE_CALLBACK(buddyStatusChanged), NULL);
 	}
 	mainObj = env->NewGlobalRef(obj);
 	mainEnv = env;
 	return ret;
 }
 
-JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstring _name, jint type, jstring _password) {
+JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstring _name, jobject _type, jstring _password) {
 	const char *name = env->GetStringUTFChars(_name, 0);
 	const char *password = env->GetStringUTFChars(_password, 0);
+	int type = enumToInt(_type);
 
 	static char prpl[30];
 	switch(type) {
@@ -378,6 +482,22 @@ JNIEXPORT void JNICALL Java_Sporky_start (JNIEnv *env, jobject obj) {
 	g_main_loop_run(loop);
 	
 	env->DeleteGlobalRef(mainObj);
+}
+
+JNIEXPORT void JNICALL Java_Session_setStatus (JNIEnv *env, jobject ses, jobject _type, jstring _message) {
+	PurpleAccount *account = session_get_account(ses);
+	int type = enumToInt(_type);
+	const PurpleStatusType *status_type = purple_account_get_status_type_with_primitive(account, (PurpleStatusPrimitive) type);
+	if (status_type != NULL) {
+		const char *message = env->GetStringUTFChars(_message, 0);
+		if (strlen(message) != 0) {
+			purple_account_set_status(account, purple_status_type_get_id(status_type), TRUE, "message", message, NULL);
+		}
+		else {
+			purple_account_set_status(account, purple_status_type_get_id(status_type), TRUE, NULL);
+		}
+		env->ReleaseStringUTFChars(_message, message);
+	}
 }
 
 static gboolean stop_libpurple(void *data) {
@@ -480,4 +600,8 @@ JNIEXPORT void JNICALL Java_Sporky_removeSocketNotifier (JNIEnv *, jobject, jint
 	// TODO: remove timerCallback somehow otherwise it will leaks on both java and C++ side
 	// but it's still better than potential crash.
 	purple_input_remove(handle);
+}
+
+JNIEXPORT void JNICALL Java_Sporky_setDebugEnabled (JNIEnv *, jobject, jint enabled) {
+	purple_debug_set_enabled(enabled);
 }

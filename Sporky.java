@@ -1,6 +1,45 @@
+enum StatusType {
+	UNSET,
+	OFFLINE,
+	AVAILABLE,
+	UNAVAILABLE,
+	INVISIBLE,
+	AWAY,
+	EXTENDED_AWAY
+}
+
+enum TransportType {
+	JABBER,
+	ICQ,
+	MSN,
+	AIM
+}
+
+enum ConnectionErrorType {
+	CONNECTION_ERROR_NETWORK_ERROR,
+	CONNECTION_ERROR_INVALID_USERNAME,
+	CONNECTION_ERROR_AUTHENTICATION_FAILED,
+	CONNECTION_ERROR_AUTHENTICATION_IMPOSSIBLE,
+	CONNECTION_ERROR_NO_SSL_SUPPORT,
+	CONNECTION_ERROR_ENCRYPTION_ERROR,
+	CONNECTION_ERROR_NAME_IN_USE,
+	CONNECTION_ERROR_INVALID_SETTINGS,
+	CONNECTION_ERROR_CERT_NOT_PROVIDED,
+	CONNECTION_ERROR_CERT_UNTRUSTED,
+	CONNECTION_ERROR_CERT_EXPIRED,
+	CONNECTION_ERROR_CERT_NOT_ACTIVATED,
+	CONNECTION_ERROR_CERT_HOSTNAME_MISMATCH,
+	CONNECTION_ERROR_CERT_FINGERPRINT_MISMATCH,
+	CONNECTION_ERROR_CERT_SELF_SIGNED,
+	CONNECTION_ERROR_CERT_OTHER_ERROR,
+	CONNECTION_ERROR_OTHER_ERROR
+}
+
 class Buddy {
 	protected String name;
 	protected String alias;
+	protected StatusType status;
+	protected String statusMessage;
 	protected long handle;
 }
 
@@ -13,9 +52,15 @@ class Session {
 	// message - message
 	protected native void sendMessage(String to, String message);
 
+	// Sets status and status message.
+	// status - status
+	// message - message
+	protected native void setStatus(StatusType type, String message);
+
 	// Called when this session connects the legacy network
 	protected void onConnected() {
 		System.out.println("onConnected");
+		setStatus(StatusType.EXTENDED_AWAY, "testing message! :)");
 		sendMessage("hanzz@njs.netlab.cz" ,"ahoj :) -- Sent by Sporky, don't answer here...");
 	}
 
@@ -23,8 +68,8 @@ class Session {
 	// Session is disconnected after this signal.
 	// error - http://developer.pidgin.im/doxygen/dev/html/connection_8h.html#d073b7b1d65488a3b3e39fc382324c4d
 	// message - error message
-	protected void onConnectionError(int error, String message) {
-		System.out.println("onConnectionError");
+	protected void onConnectionError(ConnectionErrorType error, String message) {
+		System.out.println("onConnectionError " + error);
 		System.out.println(message);
 		sporky.stop();
 	}
@@ -38,11 +83,34 @@ class Session {
 		System.out.println(buddy.name);
 	}
 
+	// Called when buddy signs off.
+	protected void onBuddySignedOff(Buddy buddy) {
+		System.out.println("onBuddySignedOff");
+		System.out.println(buddy.alias);
+		System.out.println(buddy.name);
+	}
+
+	// Called when buddy signs on.
+	protected void onBuddySignedOn(Buddy buddy) {
+		System.out.println("onBuddySignedOn");
+		System.out.println(buddy.alias);
+		System.out.println(buddy.name);
+		System.out.println(buddy.status);
+	}
+
+	// Called when buddy's status changes.
+	protected void onBuddyStatusChanged(Buddy buddy) {
+		System.out.println("onBuddyStatusChanged");
+		System.out.println(buddy.alias);
+		System.out.println(buddy.name);
+		System.out.println(buddy.status + " " + buddy.statusMessage);
+	}
+
 	// Called when all contacts are received from legacy network. This is called
 	// on every login.
 	protected void onContactsReceived(Buddy[] buddies) {
 		System.out.println("onContactsReceived");
-		System.out.println(buddies[0].name);
+		System.out.println(buddies[0].name + " " + buddies[0].status);
 		sporky.addTimer(this, "TimeoutCallbackTest", 10000);
 	}
 
@@ -73,6 +141,8 @@ class Sporky {
 	// purpleDir - directory where libpurple stored cached avatars/buddies/certificates
 	// return value - 1 if initialization was successfull, otherwise 0
 	protected native int init(String purpleDir);
+
+	protected native void setDebugEnabled(int enabled);
 
 	// Starts main event loop. This call blocks. You have to stop Sporky in some callback
 	// using stop(); method.
@@ -113,22 +183,18 @@ class Sporky {
 
 	// Connects to legacy network and creates Session.
 	// accountName - username used for login
-	// transport - enum {
-	// 	TYPE_JABBER = 0,
-	// 	TYPE_ICQ,
-	// 	TYPE_MSN,
-	// 	TYPE_AIM,
-	// };
+	// transport - type
 	// password - password
 	// return value - Session associated with this account
-	protected native Session connect(String accountName, int transport, String password);
+	protected native Session connect(String accountName, TransportType type, String password);
 
 	public static void main(String[] args) {
 		String name = args[0];
 		String password = args[1];
 		Sporky s = new Sporky();
 		s.init("/tmp");
-		Session ses = s.connect(name, 0, password);
+		s.setDebugEnabled(0);
+		Session ses = s.connect(name, TransportType.JABBER, password);
 		s.start();
 	}
 	static {
