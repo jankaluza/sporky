@@ -92,6 +92,8 @@ class Session {
 	// Adds buddy into legacy network contact list.
 	protected native Buddy addBuddy(String name, String alias);
 
+	protected native void setIcon(byte[] icon);
+
 	// Called when this session connects the legacy network
 	protected void onConnected() {
 		System.out.println("onConnected");

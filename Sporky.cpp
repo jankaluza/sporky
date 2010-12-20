@@ -676,4 +676,11 @@ JNIEXPORT void JNICALL Java_Buddy_remove (JNIEnv *env, jobject jBuddy) {
 	purple_blist_remove_buddy(buddy);
 }
 
+JNIEXPORT void JNICALL Java_Session_setIcon (JNIEnv *env, jobject ses, jbyteArray icon) {
+	jint len = env->GetArrayLength(icon);
+	guchar *photo = (guchar *) g_malloc(len * sizeof(guchar));
+	env->GetByteArrayRegion(icon, 0, len,
+							(jbyte *) photo);
 
+	purple_buddy_icons_set_account_icon(session_get_account(ses), photo, len);
+}
