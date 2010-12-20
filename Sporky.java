@@ -36,11 +36,43 @@ enum ConnectionErrorType {
 }
 
 class Buddy {
+	// Removes buddy from legacy network contact list.
+	protected native void remove();
+
+	// Called when buddy signs off.
+	protected void onSignedOff() {
+		System.out.println("onBuddySignedOff");
+		System.out.println(alias);
+		System.out.println(name);
+	}
+
+	// Called when buddy signs on.
+	protected void onSignedOn() {
+		System.out.println("onBuddySignedOn");
+		System.out.println(alias);
+		System.out.println(name);
+		System.out.println(status);
+	}
+
+	// Called when buddy's status changes.
+	protected void onStatusChanged() {
+		System.out.println("onBuddyStatusChanged");
+		System.out.println(alias);
+		System.out.println(name);
+		System.out.println(status + " " + statusMessage);
+	}
+
+	protected void onIconChanged() {
+		System.out.println("onIconChanged " + icon);
+	}
+
 	protected String name;
 	protected String alias;
 	protected StatusType status;
 	protected String statusMessage;
+	protected byte[] icon;
 	protected long handle;
+	protected Session session;
 }
 
 class Session {
@@ -56,6 +88,9 @@ class Session {
 	// status - status
 	// message - message
 	protected native void setStatus(StatusType type, String message);
+
+	// Adds buddy into legacy network contact list.
+	protected native Buddy addBuddy(String name, String alias);
 
 	// Called when this session connects the legacy network
 	protected void onConnected() {
@@ -81,29 +116,6 @@ class Session {
 		System.out.println("onBuddyCreated");
 		System.out.println(buddy.alias);
 		System.out.println(buddy.name);
-	}
-
-	// Called when buddy signs off.
-	protected void onBuddySignedOff(Buddy buddy) {
-		System.out.println("onBuddySignedOff");
-		System.out.println(buddy.alias);
-		System.out.println(buddy.name);
-	}
-
-	// Called when buddy signs on.
-	protected void onBuddySignedOn(Buddy buddy) {
-		System.out.println("onBuddySignedOn");
-		System.out.println(buddy.alias);
-		System.out.println(buddy.name);
-		System.out.println(buddy.status);
-	}
-
-	// Called when buddy's status changes.
-	protected void onBuddyStatusChanged(Buddy buddy) {
-		System.out.println("onBuddyStatusChanged");
-		System.out.println(buddy.alias);
-		System.out.println(buddy.name);
-		System.out.println(buddy.status + " " + buddy.statusMessage);
 	}
 
 	// Called when all contacts are received from legacy network. This is called

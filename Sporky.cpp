@@ -142,7 +142,43 @@ static void buddy_update_status(PurpleBuddy *b) {
 	mainEnv->SetObjectField(jBuddy, fid, enum_new("StatusType", statusTypes[status], status));
 }
 
+static void buddy_update_icon(PurpleBuddy *b) {
+	if (b->node.ui_data == NULL)
+		buddy_new(b);
+
+	jobject jBuddy = (jobject) b->node.ui_data;
+	jclass cls = mainEnv->GetObjectClass(jBuddy);
+
+	gconstpointer data = NULL;
+	size_t len;
+	PurpleStoredImage *custom_img = NULL;
+	if (b) {
+		PurpleContact *contact = purple_buddy_get_contact(b);
+		if (contact) {
+			custom_img = purple_buddy_icons_node_find_custom_icon((PurpleBlistNode*)contact);
+			if (custom_img) {
+				data = purple_imgstore_get_data(custom_img);
+				len = purple_imgstore_get_size(custom_img);
+			}
+		}
+	}
+	jbyteArray jb;
+	if (data) {
+		jb = mainEnv->NewByteArray(len);
+		mainEnv->SetByteArrayRegion(jb, 0, len, (jbyte *) data);
+	}
+	else {
+		jb = mainEnv->NewByteArray(0);
+	}
+
+	jfieldID fid;
+	fid = mainEnv->GetFieldID(cls, "icon", "[B");
+	mainEnv->SetObjectField(jBuddy, fid, jb);
+}
+
+
 static jobject buddy_new(PurpleBuddy *buddy) {
+	PurpleAccount *account = purple_buddy_get_account(buddy);
 	jfieldID fid;
 	jclass cls = mainEnv->FindClass("Buddy");
 	jmethodID mid = mainEnv->GetMethodID (cls, "<init>", "()V");
@@ -162,6 +198,9 @@ static jobject buddy_new(PurpleBuddy *buddy) {
 
 	fid = mainEnv->GetFieldID(cls, "handle", "J");
 	mainEnv->SetLongField(object, fid, (jlong) buddy); 
+
+	fid = mainEnv->GetFieldID(cls, "session", "LSession;");
+	mainEnv->SetObjectField(object, fid, (jobject) account->ui_data);
 
 	buddy->node.ui_data = mainEnv->NewGlobalRef(object);
 
@@ -205,7 +244,9 @@ static void buddyListNewNode(PurpleBlistNode *node) {
 		return;
 	PurpleBuddy *buddy = (PurpleBuddy *) node;
 	PurpleAccount *account = purple_buddy_get_account(buddy);
-	callJavaMethod((jobject) account->ui_data, "onBuddyCreated", "(LBuddy;)V", buddy_new(buddy));
+	if (buddy->node.ui_data == NULL)
+		buddy_new(buddy);
+	callJavaMethod((jobject) account->ui_data, "onBuddyCreated", "(LBuddy;)V", (jobject) buddy->node.ui_data);
 
 	int current_count = purple_account_get_int(account, "buddies_count", 0);
 	if (current_count == 0) {
@@ -226,20 +267,22 @@ static void buddyRemoved(PurpleBuddy *buddy, gpointer null) {
 
 static void buddyStatusChanged(PurpleBuddy *buddy, PurpleStatus *status, PurpleStatus *old_status) {
 	buddy_update_status(buddy);
-	PurpleAccount *account = purple_buddy_get_account(buddy);
-	callJavaMethod((jobject) account->ui_data, "onBuddyStatusChanged", "(LBuddy;)V", (jobject) buddy->node.ui_data);
+	callJavaMethod((jobject) buddy->node.ui_data, "onStatusChanged", "()V");
 }
 
 static void buddySignedOn(PurpleBuddy *buddy) {
 	buddy_update_status(buddy);
-	PurpleAccount *account = purple_buddy_get_account(buddy);
-	callJavaMethod((jobject) account->ui_data, "onBuddySignedOn", "(LBuddy;)V", (jobject) buddy->node.ui_data);
+	callJavaMethod((jobject) buddy->node.ui_data, "onSignedOn", "()V");
 }
 
 static void buddySignedOff(PurpleBuddy *buddy) {
 	buddy_update_status(buddy);
-	PurpleAccount *account = purple_buddy_get_account(buddy);
-	callJavaMethod((jobject) account->ui_data, "onBuddySignedOff", "(LBuddy;)V", (jobject) buddy->node.ui_data);
+	callJavaMethod((jobject) buddy->node.ui_data, "onSignedOff", "()V");
+}
+
+static void buddyIconChanged(PurpleBuddy *buddy) {
+	buddy_update_icon(buddy);
+	callJavaMethod((jobject) buddy->node.ui_data, "onIconChanged", "()V");
 }
 
 static void signed_on(PurpleConnection *gc,gpointer unused) {
@@ -386,11 +429,15 @@ static jobject session_new(PurpleAccount *account, int type) {
 	return object;
 }
 
-static PurpleAccount *session_get_account(jobject object) {
+static void *jobject_get_handle(jobject object) {
 	jclass cls = mainEnv->GetObjectClass(object);
 	jfieldID fid  = mainEnv->GetFieldID(cls, "handle", "J");
 	jlong handle = mainEnv->GetLongField(object, fid); 
-	return (PurpleAccount *) handle;
+	return (void *) handle;
+}
+
+static PurpleAccount *session_get_account(jobject object) {
+	return (PurpleAccount *) jobject_get_handle(object);
 }
 
 
@@ -421,6 +468,7 @@ JNIEXPORT jint JNICALL Java_Sporky_init(JNIEnv *env, jobject obj, jstring _dir) 
 		purple_signal_connect(purple_blist_get_handle(), "buddy-signed-on", &blist_handle,PURPLE_CALLBACK(buddySignedOn), NULL);
 		purple_signal_connect(purple_blist_get_handle(), "buddy-signed-off", &blist_handle,PURPLE_CALLBACK(buddySignedOff), NULL);
 		purple_signal_connect(purple_blist_get_handle(), "buddy-status-changed", &blist_handle,PURPLE_CALLBACK(buddyStatusChanged), NULL);
+		purple_signal_connect(purple_blist_get_handle(), "buddy-icon-changed", &blist_handle,PURPLE_CALLBACK(buddyIconChanged), NULL);
 	}
 	mainObj = env->NewGlobalRef(obj);
 	mainEnv = env;
@@ -605,3 +653,27 @@ JNIEXPORT void JNICALL Java_Sporky_removeSocketNotifier (JNIEnv *, jobject, jint
 JNIEXPORT void JNICALL Java_Sporky_setDebugEnabled (JNIEnv *, jobject, jint enabled) {
 	purple_debug_set_enabled(enabled);
 }
+
+JNIEXPORT jobject JNICALL Java_Session_addBuddy (JNIEnv *env, jobject ses, jstring _name, jstring _alias) {
+	PurpleAccount *account = session_get_account(ses);
+	const char *alias = env->GetStringUTFChars(_alias, 0);
+	const char *name = env->GetStringUTFChars(_name, 0);
+	PurpleBuddy *buddy = purple_buddy_new(account, name, alias);
+	if (buddy->node.ui_data == NULL)
+		buddy_new(buddy);
+
+	purple_blist_add_buddy(buddy, NULL, NULL ,NULL);
+	purple_account_add_buddy(account, buddy);
+	env->ReleaseStringUTFChars(_name, name);
+	env->ReleaseStringUTFChars(_alias, alias);
+	return (jobject) buddy->node.ui_data;
+}
+
+JNIEXPORT void JNICALL Java_Buddy_remove (JNIEnv *env, jobject jBuddy) {
+	PurpleBuddy *buddy = (PurpleBuddy *) jobject_get_handle(jBuddy);
+	PurpleAccount *account = purple_buddy_get_account(buddy);
+	purple_account_remove_buddy(account, buddy, purple_buddy_get_group(buddy));
+	purple_blist_remove_buddy(buddy);
+}
+
+
