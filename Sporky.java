@@ -12,7 +12,8 @@ enum TransportType {
 	JABBER,
 	ICQ,
 	MSN,
-	AIM
+	AIM,
+	YAHOO
 }
 
 enum ConnectionErrorType {

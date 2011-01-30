@@ -21,6 +21,7 @@ enum {
 	TYPE_ICQ,
 	TYPE_MSN,
 	TYPE_AIM,
+	TYPE_YAHOO,
 };
 
 static const char *connectionErrors[] = {
@@ -494,6 +495,9 @@ JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstr
 			break;
 		case TYPE_AIM:
 			strcpy(prpl, "prpl-aim");
+			break;
+		case TYPE_AIM:
+			strcpy(prpl, "prpl-yahoo");
 			break;
 	}
 
