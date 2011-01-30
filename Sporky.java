@@ -108,7 +108,8 @@ class Session {
 	protected void onConnectionError(ConnectionErrorType error, String message) {
 		System.out.println("onConnectionError " + error);
 		System.out.println(message);
-		sporky.stop();
+// 		sporky.stop();
+		sporky.addTimer(this, "TimeoutCallbackTest", 10000);
 	}
 
 	// Called when there's new buddy created and pushed into buddy list.
@@ -125,7 +126,7 @@ class Session {
 	protected void onContactsReceived(Buddy[] buddies) {
 		System.out.println("onContactsReceived");
 		System.out.println(buddies[0].name + " " + buddies[0].status);
-		sporky.addTimer(this, "TimeoutCallbackTest", 10000);
+		sporky.addTimer(this, "TimeoutCallbackTest", 1000);
 	}
 
 	// Called when new message is received.
@@ -209,6 +210,8 @@ class Sporky {
 		s.init("/tmp");
 		s.setDebugEnabled(0);
 		Session ses = s.connect(name, TransportType.JABBER, password);
+		s.start();
+		ses = s.connect(name, TransportType.JABBER, password);
 		s.start();
 	}
 	static {

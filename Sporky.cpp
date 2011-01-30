@@ -14,6 +14,7 @@
 static GMainLoop *loop;
 static jobject mainObj;
 static JNIEnv *mainEnv;
+int running;
 
 enum {
 	TYPE_JABBER,
@@ -526,10 +527,15 @@ JNIEXPORT void JNICALL Java_Session_disconnect (JNIEnv *env, jobject ses) {
 }
 
 JNIEXPORT void JNICALL Java_Sporky_start (JNIEnv *env, jobject obj) {
-	loop = g_main_loop_new(NULL, FALSE);
-	g_main_loop_run(loop);
+	if (!loop)
+		loop = g_main_loop_new(NULL, FALSE);
+	running = 1;
+	while (running) {
+		g_main_context_iteration(g_main_loop_get_context(loop), true);
+	}
+// 	g_main_loop_run(loop);
 	
-	env->DeleteGlobalRef(mainObj);
+// 	env->DeleteGlobalRef(mainObj);
 }
 
 JNIEXPORT void JNICALL Java_Session_setStatus (JNIEnv *env, jobject ses, jobject _type, jstring _message) {
@@ -549,18 +555,22 @@ JNIEXPORT void JNICALL Java_Session_setStatus (JNIEnv *env, jobject ses, jobject
 }
 
 static gboolean stop_libpurple(void *data) {
-	purple_blist_uninit();
-	purple_core_quit();
+	// TODO: REMOVE ME SOMEWHERE IN Sporky CLASS DESTRUCTOR
+// 	purple_blist_uninit();
+// 	purple_core_quit();
 	
-	if (loop) {
-		g_main_loop_quit(loop);
-		g_main_loop_unref(loop);
-	}
+// 	if (loop) {
+// 		g_main_loop_quit(loop);
+// 		g_main_loop_unref(loop);
+// 		loop = NULL;
+// 	}
+	running = 0;
 	return FALSE;
 }
 
 JNIEXPORT void JNICALL Java_Sporky_stop (JNIEnv *env, jobject) {
-	purple_timeout_add_seconds(0, &stop_libpurple, NULL);
+	
+	purple_timeout_add(10, &stop_libpurple, NULL);
 }
 
 JNIEXPORT void JNICALL Java_Session_sendMessage (JNIEnv *env, jobject ses, jstring _to, jstring _message) {
