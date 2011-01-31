@@ -15,6 +15,7 @@ static GMainLoop *loop;
 static jobject mainObj;
 static JNIEnv *mainEnv;
 int running;
+gint pollTimer;
 
 enum {
 	TYPE_JABBER,
@@ -530,13 +531,19 @@ JNIEXPORT void JNICALL Java_Session_disconnect (JNIEnv *env, jobject ses) {
 	purple_account_set_enabled(account, "sporky", FALSE);
 }
 
+static gboolean poll_timeout(void *data) {
+	return TRUE;
+}
+
 JNIEXPORT void JNICALL Java_Sporky_start (JNIEnv *env, jobject obj) {
 	if (!loop)
 		loop = g_main_loop_new(NULL, FALSE);
 	running = 1;
+	pollTimer = purple_timeout_add_seconds(1, &poll_timeout, NULL);
 	while (running) {
 		g_main_context_iteration(g_main_loop_get_context(loop), true);
 	}
+	purple_timeout_remove(pollTimer);
 // 	g_main_loop_run(loop);
 	
 // 	env->DeleteGlobalRef(mainObj);
