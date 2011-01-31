@@ -15,6 +15,7 @@ static GMainLoop *loop;
 static jobject mainObj;
 static JNIEnv *mainEnv;
 int running;
+GMutex *loopMutex;
 
 enum {
 	TYPE_JABBER,
@@ -407,7 +408,7 @@ static PurpleCoreUiOps coreUiOps =
 	NULL
 };
 
-static jobject session_new(PurpleAccount *account, int type) {
+static jobject session_new(int type) {
 	jfieldID fid;
 	jclass cls = mainEnv->FindClass("Session");
 	jmethodID mid = mainEnv->GetMethodID (cls, "<init>", "()V");
@@ -416,17 +417,8 @@ static jobject session_new(PurpleAccount *account, int type) {
 	fid = mainEnv->GetFieldID(cls, "type", "I");
 	mainEnv->SetIntField(object, fid, type); 
 
-	jstring name = mainEnv->NewStringUTF(purple_account_get_username(account));
-	fid = mainEnv->GetFieldID(cls, "name", "Ljava/lang/String;");
-	mainEnv->SetObjectField(object, fid, name);
-
-	fid = mainEnv->GetFieldID(cls, "handle", "J");
-	mainEnv->SetLongField(object, fid, (jlong) account); 
-
 	fid = mainEnv->GetFieldID(cls, "sporky", "LSporky;");
 	mainEnv->SetObjectField(object, fid, (jobject) mainObj); 
-
-	account->ui_data = mainEnv->NewGlobalRef(object);
 
 	return object;
 }
@@ -445,6 +437,9 @@ static PurpleAccount *session_get_account(jobject object) {
 
 JNIEXPORT jint JNICALL Java_Sporky_init(JNIEnv *env, jobject obj, jstring _dir) {
 	dlopen("libpurple.so", RTLD_NOW|RTLD_GLOBAL);
+	g_thread_init(NULL);
+	loopMutex = g_mutex_new();
+	waitingThreadsMutex = g_mutex_new();
 
 	const char *dir = env->GetStringUTFChars(_dir, 0);
 	purple_util_set_user_dir(dir);
@@ -477,13 +472,19 @@ JNIEXPORT jint JNICALL Java_Sporky_init(JNIEnv *env, jobject obj, jstring _dir) 
 	return ret;
 }
 
-JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstring _name, jobject _type, jstring _password) {
-	const char *name = env->GetStringUTFChars(_name, 0);
-	const char *password = env->GetStringUTFChars(_password, 0);
-	int type = enumToInt(_type);
+struct connectData {
+	std::string name;
+	std::string password;
+	int type;
+	jobject session;
+	void *ref;
+};
 
+static gboolean libpurple_connect(void *d) {
+	connectData *data = (connectData *) d;
+	jfieldID fid;
 	static char prpl[30];
-	switch(type) {
+	switch(data->type) {
 		case TYPE_JABBER:
 			strcpy(prpl, "prpl-jabber");
 			break;
@@ -496,12 +497,12 @@ JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstr
 		case TYPE_AIM:
 			strcpy(prpl, "prpl-aim");
 			break;
-		case TYPE_AIM:
+		case TYPE_YAHOO:
 			strcpy(prpl, "prpl-yahoo");
 			break;
 	}
 
-	PurpleAccount *account = purple_accounts_find(name, prpl);
+	PurpleAccount *account = purple_accounts_find(data->name.c_str(), prpl);
 	if (account) {
 		purple_account_set_int(account, "buddies_count", 0);
 		GList *iter;
@@ -513,15 +514,40 @@ JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstr
 		}
 // 		purple_accounts_delete(account);
 	}
-	account = purple_account_new(name, prpl);
-	purple_account_set_password(account, password);
+	account = purple_account_new(data->name.c_str(), prpl);
+	purple_account_set_password(account, data->password.c_str());
 	purple_account_set_enabled(account, "sporky", TRUE);
 	purple_accounts_add(account);
+
+	jclass cls = mainEnv->GetObjectClass(data->session);
+	jstring name = mainEnv->NewStringUTF(purple_account_get_username(account));
+	fid = mainEnv->GetFieldID(cls, "name", "Ljava/lang/String;");
+	mainEnv->SetObjectField(data->session, fid, name);
+
+	fid = mainEnv->GetFieldID(cls, "handle", "J");
+	mainEnv->SetLongField(data->session, fid, (jlong) account); 
+	account->ui_data = data->ref;
+
+
+	delete data;
+	return FALSE;
+}
+
+JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstring _name, jobject _type, jstring _password) {
+	connectData *data = new connectData;
+	const char *name = env->GetStringUTFChars(_name, 0);
+	data->name = name;
+	const char *password = env->GetStringUTFChars(_password, 0);
+	data->password = password;
+	data->type = enumToInt(_type);
+	data->session = session_new(data->type);
+	data->ref = mainEnv->NewGlobalRef(data->session);
+	purple_timeout_add(10, &libpurple_connect, data);
 
 	env->ReleaseStringUTFChars(_name, name);
 	env->ReleaseStringUTFChars(_password, password);
 	
-	return session_new(account, type);
+	return data->session;
 }
 
 JNIEXPORT void JNICALL Java_Session_disconnect (JNIEnv *env, jobject ses) {
@@ -531,15 +557,25 @@ JNIEXPORT void JNICALL Java_Session_disconnect (JNIEnv *env, jobject ses) {
 }
 
 JNIEXPORT void JNICALL Java_Sporky_start (JNIEnv *env, jobject obj) {
-	if (!loop)
-		loop = g_main_loop_new(NULL, FALSE);
-	running = 1;
-	while (running) {
-		g_main_context_iteration(g_main_loop_get_context(loop), true);
+	// only first thread can start event loop, others thread will do that on next call
+	if (g_mutex_trylock(loopMutex)) {
+		if (!loop)
+			loop = g_main_loop_new(NULL, FALSE);
+		running = 1;
+		while (running) {
+			int ret = true;
+			while (ret) {
+				ret = g_main_context_iteration(g_main_loop_get_context(loop), false);
+			}
+			g_usleep(G_USEC_PER_SEC/10);
+		}
+		g_mutex_unlock(loopMutex);
 	}
-// 	g_main_loop_run(loop);
-	
-// 	env->DeleteGlobalRef(mainObj);
+	else {
+		// block the thread until stop() is called
+		g_mutex_lock(loopMutex);
+		g_mutex_unlock(loopMutex);
+	}
 }
 
 JNIEXPORT void JNICALL Java_Session_setStatus (JNIEnv *env, jobject ses, jobject _type, jstring _message) {
