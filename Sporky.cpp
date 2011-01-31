@@ -496,7 +496,7 @@ JNIEXPORT jobject JNICALL Java_Sporky_connect (JNIEnv *env, jobject sporky, jstr
 		case TYPE_AIM:
 			strcpy(prpl, "prpl-aim");
 			break;
-		case TYPE_AIM:
+		case TYPE_YAHOO:
 			strcpy(prpl, "prpl-yahoo");
 			break;
 	}
