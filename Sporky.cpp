@@ -439,7 +439,6 @@ JNIEXPORT jint JNICALL Java_Sporky_init(JNIEnv *env, jobject obj, jstring _dir) 
 	dlopen("libpurple.so", RTLD_NOW|RTLD_GLOBAL);
 	g_thread_init(NULL);
 	loopMutex = g_mutex_new();
-	waitingThreadsMutex = g_mutex_new();
 
 	const char *dir = env->GetStringUTFChars(_dir, 0);
 	purple_util_set_user_dir(dir);
@@ -554,6 +553,10 @@ JNIEXPORT void JNICALL Java_Session_disconnect (JNIEnv *env, jobject ses) {
 	PurpleAccount *account = session_get_account(ses);
 	mainEnv->DeleteGlobalRef((jobject) account->ui_data);
 	purple_account_set_enabled(account, "sporky", FALSE);
+}
+
+static gboolean poll_timeout(void *data) {
+	return TRUE;
 }
 
 JNIEXPORT void JNICALL Java_Sporky_start (JNIEnv *env, jobject obj) {
