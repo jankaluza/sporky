@@ -18,11 +18,15 @@ int running;
 GMutex *loopMutex;
 
 enum {
-	TYPE_JABBER,
-	TYPE_ICQ,
+	TYPE_UNKNOWN = 0,
+	TYPE_COMUFY,
+	TYPE_EMAIL,
+	TYPE_PHONE,
 	TYPE_MSN,
-	TYPE_AIM,
 	TYPE_YAHOO,
+	TYPE_JABBER,
+	TYPE_AIM,
+	TYPE_ICQ
 };
 
 static const char *connectionErrors[] = {
